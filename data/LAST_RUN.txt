@@ -1,4 +1,5 @@
-utc=2026-08-13 12:05:57
+utc=2026-08-13 15:43:22
+fonte=estrazionedellotto.it
 prima=0
 dopo=0
 aggiunte=0
