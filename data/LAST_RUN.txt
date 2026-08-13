@@ -1,0 +1,5 @@
+utc=2026-08-13 11:36:30
+prima=0
+dopo=0
+aggiunte=0
+ultima=-
