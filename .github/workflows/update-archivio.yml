@@ -19,7 +19,7 @@ jobs:
           python-version: '3.11'
 
       - name: Scarica archivio serale
-        run: python scripts/aggiorna_archivio.py
+        run: python scripts/update_archivio.py
 
       - name: Commit risultati
         if: always()
