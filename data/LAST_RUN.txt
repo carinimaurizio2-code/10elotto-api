@@ -1,4 +1,4 @@
-utc=2026-08-19 19:41:21
+utc=2026-08-20 19:48:43
 fonte=estrazionedellotto.it
 prima=2535
 dopo=2535
