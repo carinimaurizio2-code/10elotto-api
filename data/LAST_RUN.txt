@@ -1,4 +1,4 @@
-utc=2026-09-06 21:24:38
+utc=2026-09-07 22:04:04
 fonte=estrazionedellotto.it
 prima=2546
 dopo=2546
