@@ -2,15 +2,26 @@ name: Aggiorna archivio 10eLotto Serale
 
 on:
   schedule:
-    - cron: "15 19 * * *"
+    # Gira alle 18:15 e 19:15 UTC.
+    # In estate (CEST) corrisponde alle 20:15 e 21:15 italiane.
+    # In inverno (CET) corrisponde alle 19:15 e 20:15 italiane.
+    # Copre perfettamente l'estrazione delle 20:00 tutto l'anno!
+    - cron: "15 18,19 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# Evita che due aggiornamenti girino contemporaneamente sovrapponendosi
+concurrency:
+  group: aggiorna-archivio-10elotto
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # Se lo script si blocca, dopo 10 min il job viene terminato
+    
     steps:
       - uses: actions/checkout@v4
 
@@ -24,12 +35,17 @@ jobs:
       - name: Commit risultati
         if: always()
         run: |
-          git config user.name "10elotto-bot"
+          git config user.name "10eLotto Bot"
           git config user.email "bot@users.noreply.github.com"
           git add data/archivio_serale.csv data/LAST_RUN.txt || true
+          
+          # Committa SOLO se ci sono modifiche reali al CSV o al file di log
           if git diff --staged --quiet; then
-            echo "Nessuna modifica da committare"
+            echo "✅ Nessuna nuova estrazione trovata. Nessun commit necessario."
           else
-            git commit -m "auto-update $(date -u +'%Y-%m-%d %H:%M UTC')"
+            # Usa il fuso orario italiano per il messaggio del commit (es. 2026-09-24 21:15)
+            DATA_ITA=$(TZ='Europe/Rome' date +'%Y-%m-%d %H:%M')
+            git commit -m "Aggiornamento estrazioni $DATA_ITA"
             git push
+            echo "✅ Archivio aggiornato e committato con successo!"
           fi
