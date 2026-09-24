@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Archivio 10eLotto SERALE da estrazionedellotto.it
-URL: /10elotto/risultati/archivio-10elotto-{year}
-
-- Prima popolazione / anni mancanti: scarica dal 2009 all'anno corrente
-- Se archivio già ricco: aggiorna anno-1 e anno corrente + eventuali buchi (es. 2009-2013)
-- Oro/DoppioOro opzionali (0 ammessi, tipico pre-Doppio Oro)
+Archivio 10eLotto SERALE - Versione Ottimizzata
+Fonte: estrazionedellotto.it
+Features: Daily Incremental Update, Retry Logic, Atomic Write, Validazione Robusta.
 """
 
 from __future__ import annotations
@@ -37,12 +34,11 @@ URL_YEAR = (
 RX_DATE = re.compile(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b")
 ANNO_MIN = 2009
 
-
 def log(msg: str) -> None:
     print(msg, flush=True)
 
-
-def fetch(url: str) -> str:
+def fetch(url: str, retries: int = 3, backoff: float = 2.0) -> str:
+    """Scarica una URL con retry automatico e gestione encoding robusta."""
     req = urllib.request.Request(
         url,
         headers={
@@ -52,15 +48,27 @@ def fetch(url: str) -> str:
             "Referer": "https://www.estrazionedellotto.it/",
         },
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        raw = resp.read()
-    for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
+    last_err = None
+    for attempt in range(1, retries + 1):
         try:
-            return raw.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return raw.decode("utf-8", errors="replace")
-
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read()
+            # Tentativi di decodifica multipli per compatibilità
+            for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
+                try:
+                    return raw.decode(enc)
+                except UnicodeDecodeError:
+                    continue
+            return raw.decode("utf-8", errors="replace")
+        except Exception as ex:
+            last_err = ex
+            log(f"  [Tentativo {attempt}/{retries}] Fallito: {type(ex).__name__}: {ex}")
+            if attempt < retries:
+                time.sleep(backoff * attempt)
+    
+    if last_err:
+        raise last_err
+    return ""
 
 def strip_html(page: str) -> str:
     page = re.sub(r"(?is)<script[^>]*>.*?</script>", "\n", page)
@@ -73,7 +81,6 @@ def strip_html(page: str) -> str:
     page = re.sub(r"\n+", "\n", page)
     return page
 
-
 def parse_data_str(s: str) -> dt.datetime | None:
     m = RX_DATE.search(s.strip())
     if not m:
@@ -83,7 +90,6 @@ def parse_data_str(s: str) -> dt.datetime | None:
         return dt.datetime(a, me, g, 20, 0, 0)
     except ValueError:
         return None
-
 
 def make_row(
     data: dt.datetime,
@@ -98,17 +104,24 @@ def make_row(
         concorso = data.timetuple().tm_yday
     if len(nums) < 20:
         return None
+    
     numeri = [int(n) for n in nums[:20]]
+    
+    # Validazione stretta (come nell'app VB)
     if any(n < 1 or n > 90 for n in numeri):
         return None
     if len(set(numeri)) != 20:
         return None
+        
     oro = int(oro or 0)
     doppio = int(doppio or 0)
+    
+    # Oro/Doppio devono essere nei 20 (se presenti)
     if oro and oro not in numeri:
         oro = 0
     if doppio and doppio not in numeri:
         doppio = 0
+        
     return {
         "data": dt.datetime(data.year, data.month, data.day, 20, 0, 0),
         "concorso": int(concorso),
@@ -117,9 +130,7 @@ def make_row(
         "doppio": doppio,
     }
 
-
 def extract_window(candidati: list[int]) -> tuple[list[int], int, int] | None:
-    """Trova 20 numeri distinti + oro/doppio opzionali dopo."""
     if len(candidati) < 20:
         return None
     for i in range(0, len(candidati) - 19):
@@ -135,7 +146,6 @@ def extract_window(candidati: list[int]) -> tuple[list[int], int, int] | None:
             oro = rest[1]
         return win, oro, doppio
     return None
-
 
 def parse_token_line(line: str) -> dict | None:
     line = line.strip()
@@ -170,14 +180,12 @@ def parse_token_line(line: str) -> dict | None:
     candidati = [n for n in right_nums if 1 <= n <= 90]
     got = extract_window(candidati)
     if not got:
-        # a volte tutta la riga mescolata
         alln = [int(x) for x in re.findall(r"\d+", line) if 1 <= int(x) <= 90]
         got = extract_window(alln)
     if not got:
         return None
     numeri, oro, doppio = got
     return make_row(data, concorso, numeri, oro, doppio)
-
 
 def parse_by_lines(text: str) -> list[dict]:
     out, seen = [], set()
@@ -191,7 +199,6 @@ def parse_by_lines(text: str) -> list[dict]:
         seen.add(k)
         out.append(row)
     return out
-
 
 def parse_by_date_blocks(text: str) -> list[dict]:
     out, seen = [], set()
@@ -210,13 +217,11 @@ def parse_by_date_blocks(text: str) -> list[dict]:
         out.append(row)
     return out
 
-
 def walk_json(obj, out: list[dict], depth: int = 0) -> None:
     if depth > 14:
         return
     if isinstance(obj, dict):
         keys = {str(k).lower(): k for k in obj.keys()}
-
         def g(*names):
             for n in names:
                 if n in keys:
@@ -265,7 +270,6 @@ def walk_json(obj, out: list[dict], depth: int = 0) -> None:
         for v in obj:
             walk_json(v, out, depth + 1)
 
-
 def parse_json_blobs(page: str) -> list[dict]:
     out: list[dict] = []
     for m in re.finditer(
@@ -300,24 +304,19 @@ def parse_json_blobs(page: str) -> list[dict]:
         uniq.append(r)
     return uniq
 
-
 def scarica_anno(year: int, write_debug: bool = False) -> list[dict]:
     url = URL_YEAR.format(year=year)
     log(f"GET {url}")
     try:
         page = fetch(url)
-    except urllib.error.HTTPError as ex:
-        log(f"  HTTP {ex.code}")
-        return []
     except Exception as ex:
-        log(f"  ERR {type(ex).__name__}: {ex}")
+        log(f"  ERRORE DOWNLOAD: {ex}")
         return []
 
     log(f"  bytes={len(page)}")
     text = strip_html(page)
     n_dates = len(RX_DATE.findall(text))
     log(f"  date nel testo: {n_dates}")
-    log(f"  campione: {text[:350]!r}")
 
     if write_debug:
         DEBUG_PATH.write_text(
@@ -325,44 +324,29 @@ def scarica_anno(year: int, write_debug: bool = False) -> list[dict]:
             f"--- TEXT ---\n{text[:8000]}\n\n--- HTML ---\n{page[:4000]}\n",
             encoding="utf-8",
         )
-        log(f"  debug -> {DEBUG_PATH.name}")
 
     rows = parse_json_blobs(page)
-    log(f"  json: {len(rows)}")
     if len(rows) < 5:
         r2 = parse_by_lines(text)
-        log(f"  lines: {len(r2)}")
         if len(r2) > len(rows):
             rows = r2
     if len(rows) < 5:
         r3 = parse_by_date_blocks(text)
-        log(f"  blocks: {len(r3)}")
         if len(r3) > len(rows):
             rows = r3
 
-    # tieni soprattutto l'anno richiesto
-    filtered = [r for r in rows if r["data"].year == year]
-    if not filtered and rows:
-        # tolleranza se date parseate male
-        filtered = [r for r in rows if abs(r["data"].year - year) <= 1]
-
+    # Tieni tutti i dati validi trovati nella pagina (il merge gestirà i duplicati)
+    # Non filtriamo più rigidamente per anno richiesto per non perdere dati a cavallo d'anno
     seen, uniq = set(), []
-    for r in filtered:
+    for r in rows:
         k = (r["data"].date().isoformat(), r["concorso"])
         if k in seen:
             continue
         seen.add(k)
         uniq.append(r)
 
-    log(f"  totale anno {year}: {len(uniq)}")
-    if uniq:
-        r = uniq[0]
-        log(
-            f"  es: {r['data']:%d/%m/%Y} #{r['concorso']} "
-            f"oro={r['oro']} doppio={r['doppio']} {r['numeri'][:5]}..."
-        )
+    log(f"  totale trovato anno {year}: {len(uniq)}")
     return uniq
-
 
 def load_csv(path: pathlib.Path) -> list[dict]:
     if not path.exists():
@@ -389,8 +373,8 @@ def load_csv(path: pathlib.Path) -> list[dict]:
             out.append(row)
     return out
 
-
 def save_csv(path: pathlib.Path, rows: list[dict]) -> None:
+    """Scrittura atomica: scrive su .tmp e poi rinomina."""
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = sorted(rows, key=lambda r: (r["data"], r["concorso"]))
     lines = ["Data;Concorso;Numeri;Oro;DoppioOro"]
@@ -399,8 +383,10 @@ def save_csv(path: pathlib.Path, rows: list[dict]) -> None:
         lines.append(
             f"{r['data']:%d/%m/%Y %H:%M};{r['concorso']};{nums};{int(r['oro'])};{int(r['doppio'])}"
         )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
+    
+    tmp_path = path.with_suffix(".csv.tmp")
+    tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp_path.replace(path)  # Atomico su POSIX/Linux
 
 def merge(dest: list[dict], src: list[dict]) -> int:
     have = {(r["data"].date().isoformat(), int(r["concorso"])) for r in dest}
@@ -414,23 +400,31 @@ def merge(dest: list[dict], src: list[dict]) -> int:
         n += 1
     return n
 
-
 def anni_da_scaricare(archivio: list[dict]) -> list[int]:
-    """Sempre ripara i buchi 2009..oggi; se pieno aggiorna solo recenti."""
+    """
+    Logica intelligente:
+    1. Se mancano anni interi (buco storico), scarica quelli.
+    2. Se l'archivio è recente (ultima estrazione <= 2 giorni fa), scarica SOLO l'anno corrente (veloce).
+    3. Altrimenti (buco recente), scarica ultimi 2 anni.
+    """
     anno_oggi = dt.date.today().year
     presenti = {r["data"].year for r in archivio}
     mancanti = [y for y in range(ANNO_MIN, anno_oggi + 1) if y not in presenti]
 
-    # PRIORITÀ: buchi storici (2009-2013 ecc.)
     if mancanti:
-        log(f"Anni mancanti da scaricare: {mancanti}")
+        log(f"Anni mancanti da recuperare: {mancanti}")
         return mancanti
 
-    # archivio completo -> solo aggiornamento
-    recenti = [anno_oggi - 1, anno_oggi]
-    log(f"Nessun buco. Aggiornamento: {recenti}")
-    return recenti
+    if archivio:
+        ultima_data = max(r["data"] for r in archivio).date()
+        giorni_dall_ultima = (dt.date.today() - ultima_data).days
+        if giorni_dall_ultima <= 2:
+            log(f"Aggiornamento giornaliero OK: scarico solo anno {anno_oggi} (ultima: {ultima_data})")
+            return [anno_oggi]
 
+    recenti = [anno_oggi - 1, anno_oggi]
+    log(f"Aggiornamento esteso (buco recente?): {recenti}")
+    return recenti
 
 def main() -> int:
     CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -445,11 +439,11 @@ def main() -> int:
     anni = anni_da_scaricare(archivio)
 
     for year in anni:
-        # debug soprattutto sugli anni vecchi
+        # Debug solo per anni vecchi o anno corrente
         rows = scarica_anno(year, write_debug=(year <= 2013 or year == dt.date.today().year))
         added = merge(archivio, rows)
         log(f"merge {year}: scaricate={len(rows)} +{added} tot={len(archivio)}")
-        time.sleep(0.8)
+        time.sleep(1.0) # Pausa di cortesia tra le richieste
 
     save_csv(CSV_PATH, archivio)
     finali = sorted({r["data"].year for r in archivio})
@@ -473,15 +467,14 @@ def main() -> int:
     log(report)
 
     if len(archivio) == 0:
-        log("ERRORE: 0 estrazioni in archivio")
+        log("ERRORE CRITICO: 0 estrazioni in archivio")
         return 1
 
     if ancora:
-        log(f"AVVISO: ancora senza {ancora} (sito vuoto o HTML diverso per quegli anni)")
-        # non fallire: tieni l'archivio parziale già buono
-    log("OK")
+        log(f"AVVISO: mancano ancora anni storici {ancora}")
+    
+    log("OK - Aggiornamento completato")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
