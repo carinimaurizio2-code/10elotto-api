@@ -1,51 +1,37 @@
-name: Aggiorna archivio 10eLotto Serale
+name: Aggiorna Archivio 10eLotto
 
 on:
   schedule:
-    # Gira alle 18:15 e 19:15 UTC.
-    # In estate (CEST) corrisponde alle 20:15 e 21:15 italiane.
-    # In inverno (CET) corrisponde alle 19:15 e 20:15 italiane.
-    # Copre perfettamente l'estrazione delle 20:00 tutto l'anno!
-    - cron: "15 18,19 * * *"
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-# Evita che due aggiornamenti girino contemporaneamente sovrapponendosi
-concurrency:
-  group: aggiorna-archivio-10elotto
-  cancel-in-progress: false
+    # Esegue ogni giorno alle 20:45 UTC (22:45 ora italiana, dopo le estrazioni)
+    - cron: '45 20 * * *'
+  workflow_dispatch: # Permette di lanciarlo manualmente dal sito di GitHub
 
 jobs:
-  update:
+  aggiorna-archivio:
     runs-on: ubuntu-latest
-    timeout-minutes: 10  # Se lo script si blocca, dopo 10 min il job viene terminato
     
+    permissions:
+      contents: write # Permette allo script di fare commit nel repository
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Scarica archivio serale
+      - name: Installa Dipendenze
+        run: pip install requests beautifulsoup4
+
+      - name: Esegui Script di Scraping
         run: python scripts/update_archivio.py
 
-      - name: Commit risultati
-        if: always()
-        run: |
-          git config user.name "10eLotto Bot"
-          git config user.email "bot@users.noreply.github.com"
-          git add data/archivio_serale.csv data/LAST_RUN.txt || true
-          
-          # Committa SOLO se ci sono modifiche reali al CSV o al file di log
-          if git diff --staged --quiet; then
-            echo "✅ Nessuna nuova estrazione trovata. Nessun commit necessario."
-          else
-            # Usa il fuso orario italiano per il messaggio del commit (es. 2026-09-24 21:15)
-            DATA_ITA=$(TZ='Europe/Rome' date +'%Y-%m-%d %H:%M')
-            git commit -m "Aggiornamento estrazioni $DATA_ITA"
-            git push
-            echo "✅ Archivio aggiornato e committato con successo!"
-          fi
+      - name: Commit e Push automatico del CSV aggiornato
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🤖 Aggiornamento automatico archivio serale"
+          file_pattern: "data/archivio_serale.csv"
+          commit_user_name: "10eLotto Bot"
+          commit_user_email: "bot@10elotto.local"
