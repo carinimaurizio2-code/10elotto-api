@@ -112,8 +112,10 @@ def main():
         print(f"-> Tentativo su {fonte['nome']}...")
         try:
             resp = requests.get(fonte['url'], headers=HEADERS, timeout=10)
+            print(f"   HTTP {resp.status_code}, {len(resp.text)} caratteri")
             if resp.status_code == 200:
                 dati = parse_generico(resp.text, fonte['nome'])
+                print(f"   Estrazioni riconosciute: {len(dati)}")
                 if len(dati) > 0:
                     print(f"   OK! Trovate {len(dati)} estrazioni da {fonte['nome']}")
                     fonte_vincente = fonte['nome']
