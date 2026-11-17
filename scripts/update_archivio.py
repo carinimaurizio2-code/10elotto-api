@@ -7,7 +7,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 
 # ============================================================================
-# CONFIGURAZIONE FONTI A CASCATA (Aggiornate e Pulite)
+# CONFIGURAZIONE FONTI A CASCATA
 # ============================================================================
 FONTI = [
     {"nome": "Lottologia", "url": "https://www.lottologia.com/10elotto/estrazioni/"},
@@ -26,7 +26,7 @@ MESI = {
 }
 
 # ============================================================================
-# PARSER GENERICO
+# PARSER GENERICO (per le fonti diverse da Lottologia)
 # ============================================================================
 def parse_generico(html, nome_fonte):
     estrazioni = []
@@ -53,30 +53,32 @@ def parse_generico(html, nome_fonte):
                 continue
 
             anno = int(anno_str)
-            if anno < 100: anno += 2000
+            if anno < 100:
+                anno += 2000
 
             data_estr = datetime(anno, mese, giorno, 20, 0, 0)
-            
+
             start = m.end()
             end = matches[i+1].start() if i + 1 < len(matches) else len(testo)
-            if end - start > 2000: end = start + 2000
-            
+            if end - start > 2000:
+                end = start + 2000
+
             blocco = testo[start:end]
-            
+
             nums = [int(n) for n in re.findall(r'\b([1-9]|[1-8]\d|90)\b', blocco)]
             unici = list(dict.fromkeys(nums))
-            
+
             if len(unici) < 20:
                 continue
-                
+
             primi_20 = unici[:20]
-            
+
             if sum(primi_20) < 500 or sum(primi_20) > 1350:
                 continue
-                
+
             oro = primi_20[0]
             doppio = primi_20[1]
-            
+
             estrazioni.append({
                 "data": data_estr.strftime("%d/%m/%Y %H:%M"),
                 "concorso": (data_estr.timetuple().tm_yday),
@@ -87,7 +89,76 @@ def parse_generico(html, nome_fonte):
             })
         except Exception:
             continue
-            
+
+    return estrazioni
+
+# ============================================================================
+# PARSER LOTTOLOGIA (stessa logica del programma VB)
+# ============================================================================
+def parse_lottologia(html, nome_fonte):
+    estrazioni = []
+    testo = re.sub(r'<script[\s\S]*?</script>', ' ', html, flags=re.I)
+    testo = re.sub(r'<style[\s\S]*?</style>', ' ', testo, flags=re.I)
+    testo = re.sub(r'<[^>]+>', ' ', testo)
+    testo = testo.replace('&nbsp;', ' ')
+    testo = re.sub(r'\s+', ' ', testo)
+
+    rx = re.compile(r'\b(\d{1,2})\s+(Gen|Feb|Mar|Apr|Mag|Giu|Lug|Ago|Set|Ott|Nov|Dic)\.?\s+(\d{4})\b', re.I)
+    matches = list(rx.finditer(testo))
+    visti = set()
+    for i, m in enumerate(matches):
+        try:
+            giorno = int(m.group(1))
+            mese = MESI[m.group(2).lower()]
+            anno = int(m.group(3))
+            fine = matches[i+1].start() if i + 1 < len(matches) else len(testo)
+            blocco = testo[m.end():fine]
+            low = blocco.lower()
+            i_num = low.find('numeri')
+            i_dop = low.find('doppio oro')
+            if i_num < 0 or i_dop < 0:
+                continue
+            i_oro = low.find('oro', i_num)
+            if i_oro < 0 or i_oro >= i_dop:
+                continue
+            i_ext = low.find('extra', i_dop)
+            fine_dop = i_ext if i_ext >= 0 else len(blocco)
+
+            c_num = ''.join(c for c in blocco[i_num+6:i_oro] if c.isdigit())
+            c_oro = ''.join(c for c in blocco[i_oro+3:i_dop] if c.isdigit())
+            c_dop = ''.join(c for c in blocco[i_dop+10:fine_dop] if c.isdigit())
+            if len(c_num) < 40:
+                continue
+            c_num = c_num[:40]
+            numeri = [int(c_num[p:p+2]) for p in range(0, 40, 2)]
+            if len(set(numeri)) != 20 or any(n < 1 or n > 90 for n in numeri):
+                continue
+
+            oro = int(c_oro[:2]) if len(c_oro) >= 2 else numeri[0]
+            if len(c_dop) >= 4:
+                doppio = int(c_dop[2:4])
+            elif len(c_dop) >= 2:
+                doppio = int(c_dop[:2])
+            else:
+                doppio = numeri[1]
+            if not (1 <= oro <= 90 and 1 <= doppio <= 90):
+                continue
+
+            data_estr = datetime(anno, mese, giorno, 20, 0, 0)
+            chiave = data_estr.strftime("%d/%m/%Y")
+            if chiave in visti:
+                continue
+            visti.add(chiave)
+            estrazioni.append({
+                "data": data_estr.strftime("%d/%m/%Y %H:%M"),
+                "concorso": data_estr.timetuple().tm_yday,
+                "numeri": " ".join(f"{n:02d}" for n in numeri),
+                "oro": oro,
+                "doppio": doppio,
+                "fonte": nome_fonte
+            })
+        except Exception:
+            continue
     return estrazioni
 
 # ============================================================================
@@ -95,11 +166,11 @@ def parse_generico(html, nome_fonte):
 # ============================================================================
 def main():
     print(f"[{datetime.now()}] Avvio aggiornamento archivio...")
-    
-    # 1. Leggi CSV esistente
+
+    # 1. Leggi CSV esistente (utf-8-sig gestisce il BOM del programma VB)
     archivio_esistente = {}
     if os.path.exists(CSV_PATH):
-       with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
+        with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
             reader = csv.DictReader(f, delimiter=';')
             for row in reader:
                 archivio_esistente[row['Data'].split()[0]] = row
@@ -114,12 +185,15 @@ def main():
             resp = requests.get(fonte['url'], headers=HEADERS, timeout=10)
             print(f"   HTTP {resp.status_code}, {len(resp.text)} caratteri")
             if resp.status_code == 200:
-                dati = parse_generico(resp.text, fonte['nome'])
+                if fonte['nome'] == "Lottologia":
+                    dati = parse_lottologia(resp.text, fonte['nome'])
+                else:
+                    dati = parse_generico(resp.text, fonte['nome'])
                 print(f"   Estrazioni riconosciute: {len(dati)}")
                 if len(dati) > 0:
                     print(f"   OK! Trovate {len(dati)} estrazioni da {fonte['nome']}")
                     fonte_vincente = fonte['nome']
-                    
+
                     for d in dati:
                         chiave_data = d['data'].split()[0]
                         if chiave_data not in archivio_esistente:
@@ -144,15 +218,15 @@ def main():
     with open(CSV_PATH, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=["Data", "Concorso", "Numeri", "Oro", "DoppioOro"], delimiter=';')
         writer.writeheader()
-        
+
         sorted_data = sorted(
-            archivio_esistente.values(), 
+            archivio_esistente.values(),
             key=lambda x: datetime.strptime(x['Data'], "%d/%m/%Y %H:%M")
         )
         writer.writerows(sorted_data)
 
     print(f"[{datetime.now()}] Fine. Fonte usata: {fonte_vincente}. Nuove aggiunte: {nuove_aggiunte}. Totale: {len(archivio_esistente)}")
-    
+
     # Ritorna sempre 0 per evitare di far fallire la GitHub Action
     sys.exit(0)
 
