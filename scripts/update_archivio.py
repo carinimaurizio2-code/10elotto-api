@@ -99,7 +99,7 @@ def main():
     # 1. Leggi CSV esistente
     archivio_esistente = {}
     if os.path.exists(CSV_PATH):
-        with open(CSV_PATH, 'r', encoding='utf-8') as f:
+       with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
             reader = csv.DictReader(f, delimiter=';')
             for row in reader:
                 archivio_esistente[row['Data'].split()[0]] = row
