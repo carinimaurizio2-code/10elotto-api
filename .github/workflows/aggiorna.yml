@@ -2,14 +2,14 @@ name: Aggiorna Estrazioni 10eLotto Serale
 
 on:
   schedule:
-    # Estrazione alle 20:00 ora italiana = 18:00 UTC (estate) / 19:00 UTC (inverno).
-    # Solo martedi(2), giovedi(4), venerdi(5), sabato(6): ogni 10 minuti dalle 18:00 alle 21:50 UTC.
+    # Giorni estrazione: mar(2), gio(4), ven(5), sab(6).
+    # 18:00-21:50 UTC copre le 19:00-22:50 italiane (sia ora legale sia solare).
     - cron: '*/10 18-21 * * 2,4,5,6'
-    # Recupero la mattina dopo (mercoledi, venerdi, sabato, domenica) se la sera e' andata male.
+    # Recupero la mattina dopo (mer, ven, sab, dom) se la sera e' andata male.
     - cron: '30 7 * * 0,3,5,6'
   workflow_dispatch:
 
-# Evita che due esecuzioni girino insieme e si pestino i piedi
+# Un solo gruppo di concorrenza: evita che due run facciano push insieme
 concurrency:
   group: aggiorna-archivio
   cancel-in-progress: false
@@ -20,10 +20,11 @@ permissions:
 jobs:
   aggiorna:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # serve per il rebase prima del push
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -36,17 +37,22 @@ jobs:
       - name: Scarica e parsa estrazioni
         run: python scraper_serale.py
 
-      # always(): salva il CSV anche se lo script segnala errore (estrazione mancante)
       - name: Commit e push dati aggiornati
         if: always()
         run: |
-          git config --global user.email "bot@10elotto.it"
-          git config --global user.name "10eLotto Bot"
+          git config user.email "bot@10elotto.it"
+          git config user.name "10eLotto Bot"
           git add data/archivio_serale.csv
           if git diff --staged --quiet; then
             echo "Nessuna modifica da salvare"
-          else
-            git commit -m "Aggiornamento estrazioni $(date +%Y-%m-%d-%H-%M)"
-            git pull --rebase
-            git push
+            exit 0
           fi
+          git commit -m "Aggiornamento estrazioni $(date +%Y-%m-%d-%H-%M)"
+          # Riprova fino a 3 volte: pull --rebase + push (risolve il 'fetch first')
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push origin main && exit 0
+            echo "Tentativo $i fallito, riprovo tra 5 secondi..."
+            sleep 5
+          done
+          echo "Push non riuscito dopo 3 tentativi"
+          exit 1
