@@ -1,9 +1,18 @@
-name: Aggiorna Estrazioni 10eLotto
+name: Aggiorna Estrazioni 10eLotto Serale
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    # Estrazione alle 20:00 ora italiana = 18:00 UTC (estate) / 19:00 UTC (inverno).
+    # Solo martedi(2), giovedi(4), venerdi(5), sabato(6): ogni 10 minuti dalle 18:00 alle 21:50 UTC.
+    - cron: '*/10 18-21 * * 2,4,5,6'
+    # Recupero la mattina dopo (mercoledi, venerdi, sabato, domenica) se la sera e' andata male.
+    - cron: '30 7 * * 0,3,5,6'
   workflow_dispatch:
+
+# Evita che due esecuzioni girino insieme e si pestino i piedi
+concurrency:
+  group: aggiorna-archivio
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -27,14 +36,17 @@ jobs:
       - name: Scarica e parsa estrazioni
         run: python scraper.py
 
+      # always(): salva il CSV anche se lo script segnala errore (estrazione mancante)
       - name: Commit e push dati aggiornati
+        if: always()
         run: |
           git config --global user.email "bot@10elotto.it"
           git config --global user.name "10eLotto Bot"
-          git add -A
+          git add data/archivio_serale.csv
           if git diff --staged --quiet; then
             echo "Nessuna modifica da salvare"
           else
             git commit -m "Aggiornamento estrazioni $(date +%Y-%m-%d-%H-%M)"
+            git pull --rebase
             git push
           fi
