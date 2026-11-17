@@ -34,7 +34,7 @@ jobs:
         run: pip install requests beautifulsoup4
 
       - name: Scarica e parsa estrazioni
-        run: python scraper.py
+        run: python scraper_serale.py
 
       # always(): salva il CSV anche se lo script segnala errore (estrazione mancante)
       - name: Commit e push dati aggiornati
