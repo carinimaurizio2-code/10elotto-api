@@ -1,24 +1,38 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scraper 10eLotto SERALE per GitHub Actions.
-Aggiorna data/archivio_serale.csv.
-Gestisce automaticamente le festività italiane per evitare falsi allarmi.
+Scraper 10eLotto SERALE per GitHub Actions (Versione Ottimizzata).
+- Timeout ridotto per evitare blocchi.
+- Watchdog di sicurezza (max 3 minuti).
+- Gestione festività italiane.
 """
 
 import csv
 import os
 import re
 import sys
+import signal
 from datetime import datetime, timedelta
 
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
-    from backports.zoneinfo import ZoneInfo # Fallback per Python < 3.9 (raro su Actions)
+    from backports.zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
+
+# --- WATCHDOG: Uccidi lo script se supera i 3 minuti (180 secondi) ---
+def handler(signum, frame):
+    print("!!! TIMEOUT GLOBALE: Lo script ha superato i 3 minuti. Uscita forzata.", flush=True)
+    sys.exit(1)
+
+# Imposta l'allarme (funziona su Linux/Mac/GitHub Actions)
+try:
+    signal.signal(signal.SIGALRM, handler)
+    signal.alarm(180)
+except AttributeError:
+    pass # Su Windows locale non funziona, ma su GitHub Actions (Linux) sì.
 
 # --- CONFIGURAZIONE ---
 TZ = ZoneInfo("Europe/Rome")
@@ -26,12 +40,10 @@ GIORNI_ESTRAZIONE = (1, 3, 4, 5)          # weekday(): lun=0 -> mar(1), gio(3), 
 ORA_ESTRAZIONE_MIN = 20 * 60 + 5          # 20:05
 ORA_ALLARME_MIN = 21 * 60 + 30            # 21:30
 
-# Percorso relativo alla root del repo (importante per GitHub Actions)
 CSV_PATH = "data/archivio_serale.csv"
 CAMPI = ["Data", "Concorso", "Numeri", "Oro", "DoppioOro"]
 
-# Festività fisse in cui NON c'è estrazione (GG/MM)
-# Aggiunte per evitare che lo script fallisca a Ferragosto, Natale, ecc.
+# Festività fisse (GG/MM)
 FESTIVITA_FISSE = {
     "01/01", "06/01", "25/04", "01/05", "02/06", 
     "15/08", "01/11", "08/12", "25/12", "26/12"
@@ -95,7 +107,7 @@ def valida(numeri, oro, doppio):
     return True
 
 # ---------------------------------------------------------------------------
-# PARSERS (Logica identica alla precedente, robusta)
+# PARSERS
 # ---------------------------------------------------------------------------
 def parse_lottologia(html):
     testo = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
@@ -196,7 +208,6 @@ def carica_archivio():
             with open(CSV_PATH, "r", encoding="utf-8-sig", newline="") as f:
                 for row in csv.DictReader(f, delimiter=";"):
                     if row.get("Data"):
-                        # Normalizza la chiave data (solo GG/MM/YYYY)
                         data_key = row["Data"].split()[0]
                         archivio[data_key] = row
         except Exception as e:
@@ -223,14 +234,11 @@ def salva_archivio(archivio):
 def main():
     ora = datetime.now(TZ)
     oggi_str = ora.strftime("%d/%m/%Y")
-    oggi_festa_key = ora.strftime("%d/%m") # Per controllo festività
+    oggi_festa_key = ora.strftime("%d/%m")
     minuti = ora.hour * 60 + ora.minute
     
-    # Controllo giorno settimana (0=Lun ... 6=Dom)
     giorno_settimana = ora.weekday()
     giorno_estrazione_teorico = giorno_settimana in GIORNI_ESTRAZIONE
-    
-    # Controllo Festività
     is_festivo = oggi_festa_key in FESTIVITA_FISSE
     
     log(f"Avvio aggiornamento: Oggi è {oggi_str} ({ora.strftime('%A')})")
@@ -239,45 +247,37 @@ def main():
     archivio = carica_archivio()
     log(f"Archivio caricato: {len(archivio)} righe.")
 
-    # Se è festa, non ci aspettiamo nulla. Usciamo puliti (codice 0).
     if is_festivo:
         log("Oggi è festivo: nessuna estrazione attesa. Esco senza errori.")
         sys.exit(0)
 
-    # Se non è giorno di estrazione (es. Domenica), usciamo puliti.
     if not giorno_estrazione_teorico:
         log("Oggi non è giorno di estrazione. Esco senza errori.")
         sys.exit(0)
 
-    # Siamo in un giorno di estrazione valido. Controlliamo se manca.
     if oggi_str in archivio:
         log(f"L'estrazione di oggi ({oggi_str}) è già presente nell'archivio.")
-        # Non usciamo subito: potremmo voler aggiornare dati recenti mancanti (es. ieri)
-        # Ma per sicurezza, se abbiamo già oggi, possiamo considerare il lavoro quasi finito.
     
     nuove = 0
-    limite_recente = (ora - timedelta(days=15)).date() # Scarica ultimi 15 giorni per sicurezza
+    limite_recente = (ora - timedelta(days=15)).date()
 
     for fonte in FONTI:
-        # Ottimizzazione: se ho già trovato novità e ho l'estrazione di oggi, posso fermarmi
-        # Ma eseguiamo sempre Lottologia per sicurezza storica recente.
         if nuove > 0 and oggi_str in archivio and fonte["nome"] != "Lottologia":
             log("Dati odierni trovati e aggiornati. Skip fonti secondarie.")
             break
             
         log(f"-> Download da {fonte['nome']}...")
         try:
-            resp = requests.get(fonte["url"], headers=HEADERS, timeout=25)
+            # TIMEOUT RIDOTTO A 10 SECONDI per evitare blocchi su GitHub Actions
+            resp = requests.get(fonte["url"], headers=HEADERS, timeout=10)
             if resp.status_code != 200:
                 log(f"   Errore HTTP {resp.status_code}")
                 continue
             
             dati = PARSERS[fonte["parser"]](resp.text)
             
-            # Filtro date: prendiamo solo roba recente o mancante
             dati_filtrati = []
             for d, numeri, oro, doppio in dati:
-                # Se è Lottologia, prendiamo tutto (storico). Se altri, solo recenti.
                 if fonte["parser"] == "lottologia" or d.date() >= limite_recente:
                     dati_filtrati.append((d, numeri, oro, doppio))
             
@@ -286,8 +286,6 @@ def main():
             for d, numeri, oro, doppio in dati_filtrati:
                 k = d.strftime("%d/%m/%Y")
                 if k in archivio:
-                    # Opzionale: qui si potrebbe fare un check se i numeri sono diversi e aggiornare
-                    # Per ora, se esiste, skip (politica conservativa)
                     continue
                 
                 archivio[k] = {
@@ -301,7 +299,7 @@ def main():
                 log(f"   [+] Aggiunta estrazione del {k}")
                 
         except requests.exceptions.RequestException as e:
-            log(f"   Errore rete: {e}")
+            log(f"   Errore rete (timeout o connessione): {e}")
         except Exception as e:
             log(f"   Errore parsing: {e}")
 
@@ -311,12 +309,10 @@ def main():
     else:
         log("Nessuna nuova estrazione trovata.")
 
-    # Controllo finale Allarme
-    # Se siamo oltre le 21:30, è giorno di estrazione, NON è festa, e MANCA oggi -> ERRORE
     if minuti >= ORA_ALLARME_MIN and oggi_str not in archivio:
         log(f"!!! ALLARME: Sono le {ora.strftime('%H:%M')}, è giorno di estrazione, ma non ho trovato i dati di oggi.")
         log("!!! Le fonti potrebbero essere down o cambiate. Verificare manualmente.")
-        sys.exit(1) # Questo farà fallire il workflow GitHub (badge rosso)
+        sys.exit(1)
 
     sys.exit(0)
 
