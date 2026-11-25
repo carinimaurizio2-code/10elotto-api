@@ -20,6 +20,7 @@ permissions:
 jobs:
   aggiorna:
     runs-on: ubuntu-latest
+    timeout-minutes: 10   # sicurezza: il job non puo' restare appeso piu' di 10 minuti
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,16 +40,16 @@ jobs:
         run: python scraper_serale.py
 
       - name: Commit e push dati aggiornati
-        if: success()
+        if: always()   # pubblica i dati anche se lo script ha dato ALLARME (il run resta rosso)
         run: |
           git config --global user.email "bot@10elotto.it"
           git config --global user.name "10eLotto Bot"
-          git add data/archivio_serale.csv
+          git add data/archivio_serale.csv data/LAST_RUN.txt
           if git diff --staged --quiet; then
             echo "Nessuna modifica da salvare"
             exit 0
           fi
-          git commit -m "Aggiornamento estrazioni $(date +%Y-%m-%d-%H-%M)"
+          git commit -m "Aggiornamento estrazioni $(TZ='Europe/Rome' date +%Y-%m-%d-%H-%M) ora italiana"
           # Riprova fino a 3 volte: pull --rebase + push (risolve il 'fetch first')
           for i in 1 2 3; do
             git pull --rebase -X theirs origin main && git push origin HEAD:main && exit 0
