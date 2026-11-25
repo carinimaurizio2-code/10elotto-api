@@ -5,6 +5,7 @@ Scraper 10eLotto SERALE per GitHub Actions (Versione Ottimizzata).
 - Timeout ridotto per evitare blocchi.
 - Watchdog di sicurezza (max 3 minuti).
 - Gestione festività italiane.
+- Aggiorna data/LAST_RUN.txt quando aggiunge nuove estrazioni.
 """
 
 import csv
@@ -32,7 +33,7 @@ try:
     signal.signal(signal.SIGALRM, handler)
     signal.alarm(180)
 except AttributeError:
-    pass # Su Windows locale non funziona, ma su GitHub Actions (Linux) sì.
+    pass  # Su Windows locale non funziona, ma su GitHub Actions (Linux) sì.
 
 # --- CONFIGURAZIONE ---
 TZ = ZoneInfo("Europe/Rome")
@@ -45,7 +46,7 @@ CAMPI = ["Data", "Concorso", "Numeri", "Oro", "DoppioOro"]
 
 # Festività fisse (GG/MM)
 FESTIVITA_FISSE = {
-    "01/01", "06/01", "25/04", "01/05", "02/06", 
+    "01/01", "06/01", "25/04", "01/05", "02/06",
     "15/08", "01/11", "08/12", "25/12", "26/12"
 }
 
@@ -220,7 +221,7 @@ def salva_archivio(archivio):
     def chiave_ordine(r):
         try: return datetime.strptime(r["Data"], "%d/%m/%Y %H:%M")
         except ValueError: return datetime.strptime(r["Data"].split()[0], "%d/%m/%Y")
-    
+
     with open(tmp, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=CAMPI, delimiter=";")
         w.writeheader()
@@ -236,11 +237,11 @@ def main():
     oggi_str = ora.strftime("%d/%m/%Y")
     oggi_festa_key = ora.strftime("%d/%m")
     minuti = ora.hour * 60 + ora.minute
-    
+
     giorno_settimana = ora.weekday()
     giorno_estrazione_teorico = giorno_settimana in GIORNI_ESTRAZIONE
     is_festivo = oggi_festa_key in FESTIVITA_FISSE
-    
+
     log(f"Avvio aggiornamento: Oggi è {oggi_str} ({ora.strftime('%A')})")
     log(f"Giorno estrazione teorico: {'SI' if giorno_estrazione_teorico else 'NO'} | Festività: {'SI' if is_festivo else 'NO'}")
 
@@ -257,7 +258,7 @@ def main():
 
     if oggi_str in archivio:
         log(f"L'estrazione di oggi ({oggi_str}) è già presente nell'archivio.")
-    
+
     nuove = 0
     limite_recente = (ora - timedelta(days=15)).date()
 
@@ -265,7 +266,7 @@ def main():
         if nuove > 0 and oggi_str in archivio and fonte["nome"] != "Lottologia":
             log("Dati odierni trovati e aggiornati. Skip fonti secondarie.")
             break
-            
+
         log(f"-> Download da {fonte['nome']}...")
         try:
             # TIMEOUT RIDOTTO A 10 SECONDI per evitare blocchi su GitHub Actions
@@ -273,21 +274,21 @@ def main():
             if resp.status_code != 200:
                 log(f"   Errore HTTP {resp.status_code}")
                 continue
-            
+
             dati = PARSERS[fonte["parser"]](resp.text)
-            
+
             dati_filtrati = []
             for d, numeri, oro, doppio in dati:
                 if fonte["parser"] == "lottologia" or d.date() >= limite_recente:
                     dati_filtrati.append((d, numeri, oro, doppio))
-            
+
             log(f"   Trovate {len(dati_filtrati)} estrazioni valide.")
-            
+
             for d, numeri, oro, doppio in dati_filtrati:
                 k = d.strftime("%d/%m/%Y")
                 if k in archivio:
                     continue
-                
+
                 archivio[k] = {
                     "Data": d.strftime("%d/%m/%Y %H:%M"),
                     "Concorso": str(d.timetuple().tm_yday),
@@ -297,7 +298,7 @@ def main():
                 }
                 nuove += 1
                 log(f"   [+] Aggiunta estrazione del {k}")
-                
+
         except requests.exceptions.RequestException as e:
             log(f"   Errore rete (timeout o connessione): {e}")
         except Exception as e:
@@ -306,6 +307,17 @@ def main():
     if nuove > 0:
         salva_archivio(archivio)
         log(f"Aggiornamento completato: +{nuove} nuove estrazioni.")
+        # --- NOVITÀ: aggiorna il file di monitoraggio LAST_RUN.txt ---
+        try:
+            ultima = max(archivio.keys(), key=lambda k: datetime.strptime(k, "%d/%m/%Y"))
+            with open("data/LAST_RUN.txt", "w", encoding="utf-8") as f:
+                f.write(f"ora_italia={datetime.now(TZ):%Y-%m-%d %H:%M:%S}\n")
+                f.write(f"righe={len(archivio)}\n")
+                f.write(f"nuove={nuove}\n")
+                f.write(f"ultima={ultima}\n")
+            log("LAST_RUN.txt aggiornato.")
+        except Exception as e:
+            log(f"LAST_RUN non scritto: {e}")
     else:
         log("Nessuna nuova estrazione trovata.")
 
