@@ -1,4 +1,4 @@
-ora_italia=2026-11-27 02:17:56
-righe=2592
+ora_italia=2026-11-28 01:52:11
+righe=2593
 nuove=1
-ultima=26/11/2026
+ultima=27/11/2026
